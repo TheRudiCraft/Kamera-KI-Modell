@@ -1,0 +1,106 @@
+name: Kleinere Fassungen testen (4 und 6 Bit)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/klein.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verkleinern:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      matrix:
+        variante: [pal6, pal4, int4]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pakete installieren
+        run: python -m pip install --quiet "numpy<2.3" coremltools==9.0 torch==2.7.0 --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gen-fp16
+          path: fp16.mlpackage
+          run-id: 45664861595
+          github-token: ${{ github.token }}
+
+      - name: Verkleinern
+        run: |
+          python - <<'EOF'
+          import os, time
+          import coremltools as ct
+          variante = os.environ["VARIANTE"]
+          model = ct.models.MLModel("fp16.mlpackage", skip_model_load=True)
+          begin = time.time()
+          if variante == "int4":
+              cfg = ct.optimize.coreml.OpLinearQuantizerConfig(
+                  mode="linear_symmetric", dtype="int4", granularity="per_block", block_size=32, weight_threshold=2048)
+              out = ct.optimize.coreml.linear_quantize_weights(model, ct.optimize.coreml.OptimizationConfig(global_config=cfg))
+          else:
+              bits = 6 if variante == "pal6" else 4
+              cfg = ct.optimize.coreml.OpPalettizerConfig(
+                  mode="kmeans", nbits=bits, granularity="per_grouped_channel", group_size=16, weight_threshold=2048)
+              out = ct.optimize.coreml.palettize_weights(model, ct.optimize.coreml.OptimizationConfig(global_config=cfg))
+          print("Dauer Sekunden:", round(time.time() - begin))
+          out.save(f"{variante}.mlpackage")
+          EOF
+          du -sh $VARIANTE.mlpackage
+        env:
+          VARIANTE: ${{ matrix.variante }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: klein-${{ matrix.variante }}
+          path: ${{ matrix.variante }}.mlpackage
+          compression-level: 0
+
+  pruefen:
+    needs: verkleinern
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        variante: [pal6, pal4, int4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: referenz
+          path: referenz
+          run-id: 45664861595
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: klein-${{ matrix.variante }}
+          path: modell.mlpackage
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pakete installieren
+        run: python -m pip install --quiet "numpy<2.3" coremltools==9.0 pillow
+
+      - name: Größe und Qualität
+        run: |
+          du -sh modell.mlpackage
+          python scripts/test_coreml.py modell.mlpackage referenz ergebnis cpu
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ergebnis-${{ matrix.variante }}
+          path: ergebnis
