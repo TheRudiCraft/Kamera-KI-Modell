@@ -6,10 +6,14 @@ on:
     branches: [main]
     paths:
       - scripts/convert_gen.py
+      - scripts/safe_fp16.py
       - .github/workflows/build.yml
 
 permissions:
   contents: write
+
+env:
+  TAG: gen-osediff-2
 
 jobs:
   convert:
@@ -38,31 +42,114 @@ jobs:
       - name: Pakete installieren
         run: |
           python -m pip install --quiet torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install --quiet "numpy<2.3" coremltools==9.0 diffusers transformers peft accelerate safetensors
+          python -m pip install --quiet "numpy<2.3" coremltools==9.0 diffusers transformers peft accelerate safetensors scikit-image pillow
 
       - name: OSEDiff holen
         run: git clone --depth 1 https://github.com/cswry/OSEDiff.git /mnt/OSEDiff
 
       - name: Konvertieren
-        run: python scripts/convert_gen.py /mnt/GenerativeDetail.mlpackage /mnt/OSEDiff/preset/models/osediff.pkl
+        run: python scripts/convert_gen.py /mnt/gen /mnt/OSEDiff/preset/models/osediff.pkl referenz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: referenz
+          path: referenz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gen-int8
+          path: /mnt/gen/int8.mlpackage
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gen-fp16
+          path: /mnt/gen/fp16.mlpackage
+          compression-level: 0
+
+  pruefen-und-veroeffentlichen:
+    needs: convert
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: referenz
+          path: referenz
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gen-int8
+          path: int8.mlpackage
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gen-fp16
+          path: fp16.mlpackage
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pakete installieren
+        run: python -m pip install --quiet "numpy<2.3" coremltools==9.0 pillow
+
+      - name: Beide Fassungen gegen das Original prüfen
+        run: |
+          python scripts/test_coreml.py int8.mlpackage referenz ergebnis-int8 cpu
+          python scripts/test_coreml.py fp16.mlpackage referenz ergebnis-fp16 cpu
+
+      - name: Fassung wählen
+        id: wahl
+        run: |
+          python - <<'EOF'
+          import json, os
+          def score(name):
+              try:
+                  return json.load(open(f"ergebnis-{name}/coreml.json"))["cpu"]["psnr_vs_torch"]
+              except Exception:
+                  return 0
+          int8, fp16 = score("int8"), score("fp16")
+          print("PSNR int8", int8, "fp16", fp16)
+          choice = "int8" if int8 >= 30 else ("fp16" if fp16 >= 30 else "")
+          if not choice:
+              raise SystemExit("Keine Fassung erreicht 30 dB, nichts veröffentlicht")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"fassung={choice}\n")
+          with open("wahl.txt", "w") as f:
+              f.write(f"Gewählt: {choice}. PSNR gegen PyTorch-Original: int8 {int8:.1f} dB, fp16 {fp16:.1f} dB\n\nCore-ML-Fassung von OSEDiff (Basis Stable Diffusion 2.1 base, Lizenz CreativeML Open RAIL++-M), mit überlaufsicheren Normierungen und Attention für fp16. Wird von der Kamera-App unter Einstellungen geladen.")
+          EOF
 
       - name: Dateien vorbereiten
         run: |
-          mkdir -p /mnt/out
-          cp /mnt/GenerativeDetail.mlpackage/Manifest.json /mnt/out/Manifest.json
-          cp /mnt/GenerativeDetail.mlpackage/Data/com.apple.CoreML/model.mlmodel /mnt/out/model.mlmodel
-          cp /mnt/GenerativeDetail.mlpackage/Data/com.apple.CoreML/weights/weight.bin /mnt/out/weight.bin
-          find /mnt/GenerativeDetail.mlpackage -type f -exec ls -l {} \;
-          ls -l /mnt/out
+          pkg=${{ steps.wahl.outputs.fassung }}.mlpackage
+          mkdir -p out
+          cp $pkg/Manifest.json out/Manifest.json
+          cp $pkg/Data/com.apple.CoreML/model.mlmodel out/model.mlmodel
+          cp $pkg/Data/com.apple.CoreML/weights/weight.bin out/weight.bin
+          cp ergebnis-${{ steps.wahl.outputs.fassung }}/coreml_cpu.png out/kontrolle.png
+          ls -l out
+          cat wahl.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pruefung
+          path: |
+            ergebnis-int8
+            ergebnis-fp16
+            wahl.txt
 
       - name: Als Release veröffentlichen
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: gen-osediff-1
-          name: Generatives Modell (OSEDiff)
-          body: Core-ML-Fassung von OSEDiff (Basis Stable Diffusion 2.1 base, Lizenz CreativeML Open RAIL++-M). Wird von der Kamera-App unter Einstellungen geladen.
+          tag_name: ${{ env.TAG }}
+          name: Generatives Modell (OSEDiff, überlaufsicher)
+          body_path: wahl.txt
           files: |
-            /mnt/out/Manifest.json
-            /mnt/out/model.mlmodel
-            /mnt/out/weight.bin
+            out/Manifest.json
+            out/model.mlmodel
+            out/weight.bin
+            out/kontrolle.png
           make_latest: true
