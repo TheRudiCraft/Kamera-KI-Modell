@@ -1,0 +1,85 @@
+name: Generatives Modell prüfen
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/test_reference.py
+      - scripts/test_coreml.py
+      - .github/workflows/test.yml
+
+jobs:
+  referenz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_HOME: /mnt/hf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Platz und Swap schaffen
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo chmod 777 /mnt
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pakete installieren
+        run: |
+          python -m pip install --quiet torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --quiet "numpy<2.3" coremltools==9.0 diffusers transformers peft accelerate safetensors scikit-image pillow
+
+      - name: OSEDiff holen
+        run: git clone --depth 1 https://github.com/cswry/OSEDiff.git /mnt/OSEDiff
+
+      - name: Referenz mit PyTorch rechnen
+        run: python scripts/test_reference.py /mnt/OSEDiff/preset/models/osediff.pkl referenz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: referenz
+          path: referenz
+
+  coreml:
+    needs: referenz
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: referenz
+          path: referenz
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pakete installieren
+        run: python -m pip install --quiet "numpy<2.3" coremltools==9.0 pillow
+
+      - name: Modell aus dem Release zusammensetzen
+        run: |
+          base=https://github.com/TheRudiCraft/Kamera-KI-Modell/releases/download/gen-osediff-1
+          mkdir -p GenerativeDetail.mlpackage/Data/com.apple.CoreML/weights
+          curl -sSL -o GenerativeDetail.mlpackage/Manifest.json $base/Manifest.json
+          curl -sSL -o GenerativeDetail.mlpackage/Data/com.apple.CoreML/model.mlmodel $base/model.mlmodel
+          curl -sSL -o GenerativeDetail.mlpackage/Data/com.apple.CoreML/weights/weight.bin $base/weight.bin
+          ls -lR GenerativeDetail.mlpackage
+
+      - name: Mit Core ML rechnen
+        run: python scripts/test_coreml.py GenerativeDetail.mlpackage referenz ergebnis
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ergebnis
+          path: ergebnis
