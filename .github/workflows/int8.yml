@@ -1,0 +1,53 @@
+name: int8-Fassung veröffentlichen
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/int8.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  veroeffentlichen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: gen-int8
+          path: int8.mlpackage
+          run-id: 45664861595
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pruefung
+          path: pruefung
+          run-id: 45664861595
+          github-token: ${{ github.token }}
+
+      - name: Dateien vorbereiten
+        run: |
+          mkdir -p out
+          cp int8.mlpackage/Manifest.json out/Manifest.json
+          cp int8.mlpackage/Data/com.apple.CoreML/model.mlmodel out/model.mlmodel
+          cp int8.mlpackage/Data/com.apple.CoreML/weights/weight.bin out/weight.bin
+          cp pruefung/ergebnis-int8/coreml_cpu.png out/kontrolle.png
+          ls -l out
+          printf 'Gewählt: int8 (915 MB). PSNR gegen PyTorch-Original: int8 29.3 dB, fp16 37.9 dB, sichtbar kein Unterschied.\n\nCore-ML-Fassung von OSEDiff (Basis Stable Diffusion 2.1 base, Lizenz CreativeML Open RAIL++-M), mit überlaufsicheren Normierungen und Attention für fp16. Wird von der Kamera-App unter Einstellungen geladen.\n' > body.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: gen-osediff-2
+          name: Generatives Modell (OSEDiff, überlaufsicher)
+          body_path: body.txt
+          overwrite_files: true
+          files: |
+            out/Manifest.json
+            out/model.mlmodel
+            out/weight.bin
+            out/kontrolle.png
+          make_latest: true
