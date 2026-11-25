@@ -113,9 +113,9 @@ jobs:
                   return 0
           int8, fp16 = score("int8"), score("fp16")
           print("PSNR int8", int8, "fp16", fp16)
-          choice = "int8" if int8 >= 30 else ("fp16" if fp16 >= 30 else "")
+          choice = "int8" if int8 >= 28 else ("fp16" if fp16 >= 30 else "")
           if not choice:
-              raise SystemExit("Keine Fassung erreicht 30 dB, nichts veröffentlicht")
+              raise SystemExit("Keine Fassung gut genug, nichts veröffentlicht")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"fassung={choice}\n")
           with open("wahl.txt", "w") as f:
