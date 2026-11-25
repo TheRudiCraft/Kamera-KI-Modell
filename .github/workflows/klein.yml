@@ -1,4 +1,4 @@
-name: Kleinere Fassungen testen (5 Bit)
+name: Kleinere Fassungen testen (1, 2 und 3 Bit)
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variante: [pal5]
+        variante: [pal1, pal2, pal3]
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -47,7 +47,7 @@ jobs:
                   mode="linear_symmetric", dtype="int4", granularity="per_block", block_size=32, weight_threshold=2048)
               out = ct.optimize.coreml.linear_quantize_weights(model, ct.optimize.coreml.OptimizationConfig(global_config=cfg))
           else:
-              bits = {"pal6": 6, "pal5": 5, "pal4": 4}[variante]
+              bits = {"pal6": 6, "pal4": 4, "pal3": 3, "pal2": 2, "pal1": 1}[variante]
               cfg = ct.optimize.coreml.OpPalettizerConfig(
                   mode="kmeans", nbits=bits, granularity="per_grouped_channel", group_size=16, weight_threshold=2048)
               out = ct.optimize.coreml.palettize_weights(model, ct.optimize.coreml.OptimizationConfig(global_config=cfg))
@@ -71,7 +71,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variante: [pal5]
+        variante: [pal1, pal2, pal3]
     steps:
       - uses: actions/checkout@v4
 
