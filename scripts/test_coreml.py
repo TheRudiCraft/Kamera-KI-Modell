@@ -35,7 +35,10 @@ def main():
         "cpu_ne": ct.ComputeUnit.CPU_AND_NE,
         "all": ct.ComputeUnit.ALL,
     }
+    wanted = sys.argv[4].split(",") if len(sys.argv) > 4 else list(units)
     for name, unit in units.items():
+        if name not in wanted:
+            continue
         entry = {}
         try:
             begin = time.time()
