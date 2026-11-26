@@ -1,0 +1,46 @@
+name: AdcSR diagnostizieren
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/adcsr-diag.yml
+      - scripts/diag_adcsr.py
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HF_HOME: /mnt/hf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Platz und Swap schaffen
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo chmod 777 /mnt
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pakete installieren
+        run: |
+          python -m pip install --quiet torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --quiet "numpy<2.3" coremltools==9.0 diffusers==0.32.2 transformers==4.46.3 huggingface_hub==0.27.1 accelerate safetensors scikit-image pillow pytorch-lightning==2.4.0 omegaconf
+
+      - name: AdcSR holen
+        run: git clone --depth 1 https://github.com/Guaishou74851/AdcSR.git /mnt/AdcSR
+
+      - name: Schicht für Schicht prüfen
+        run: python scripts/diag_adcsr.py /mnt/AdcSR referenz
