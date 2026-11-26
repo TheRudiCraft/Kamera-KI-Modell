@@ -29,6 +29,47 @@ class Wrapper(torch.nn.Module):
         return (y.clamp(-1, 1) + 1) * 127.5
 
 
+def calibration_samples():
+    from skimage import data as sk
+
+    names = ["astronaut", "camera", "coffee", "chelsea", "rocket"]
+    out = []
+    for n in names:
+        arr = getattr(sk, n)()
+        im = Image.fromarray(arr).convert("RGB").resize((LR * SCALE, LR * SCALE), Image.BICUBIC).resize((LR, LR), Image.BICUBIC)
+        t = torch.from_numpy(np.asarray(im).astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0)
+        out.append(t)
+    out.append(out[0] * 0.3)
+    rng = np.random.default_rng(1)
+    noisy = (out[0] + torch.from_numpy(rng.normal(0, 0.08, out[0].shape).astype(np.float32))).clamp(0, 1)
+    out.append(noisy)
+    return out
+
+
+def calibrate_norm_scales(model, samples, margin=1.5, target=16.0):
+    peaks = {}
+    hooks = []
+
+    def make(name):
+        def pre(module, inputs):
+            peak = float(inputs[0].detach().abs().max())
+            peaks[name] = max(peaks.get(name, 0.0), peak)
+        return pre
+
+    for name, module in model.named_modules():
+        if isinstance(module, (torch.nn.GroupNorm, torch.nn.LayerNorm)):
+            hooks.append(module.register_forward_pre_hook(make(name)))
+    with torch.no_grad():
+        for sample in samples:
+            model(sample)
+    for h in hooks:
+        h.remove()
+    ks = {name: max(32.0, peak * margin / target) for name, peak in peaks.items()}
+    biggest = sorted(ks.items(), key=lambda kv: -kv[1])[:6]
+    print("Normierungsteiler (größte):", [(n, round(k)) for n, k in biggest], flush=True)
+    return ks
+
+
 def build(adc_dir):
     sys.path.insert(0, adc_dir)
     from model import Net
@@ -80,7 +121,8 @@ def main():
     print("Ausgabeform:", tuple(reference.shape))
     Image.fromarray(reference[0].permute(1, 2, 0).clamp(0, 255).numpy().astype(np.uint8)).save(os.path.join(ref_dir, "torch_out.png"))
 
-    print("überlaufsichere Normierungen:", safe_fp16.make_norms_safe(model))
+    ks = calibrate_norm_scales(model, calibration_samples())
+    print("überlaufsichere Normierungen:", safe_fp16.make_norms_safe(model, ks))
     attention = 0
     for module in model.modules():
         if hasattr(module, "set_processor"):

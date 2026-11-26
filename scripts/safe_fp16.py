@@ -28,14 +28,15 @@ class SafeLayerNorm(torch.nn.Module):
         return F.layer_norm(x * self.inv, self.shape, self.weight, self.bias, self.eps)
 
 
-def make_norms_safe(model):
+def make_norms_safe(model, ks=None):
     count = 0
     for name, module in list(model.named_modules()):
         replacement = None
+        k = float(ks.get(name, 32.0)) if ks else 32.0
         if isinstance(module, torch.nn.GroupNorm):
-            replacement = SafeGroupNorm(module)
+            replacement = SafeGroupNorm(module, k)
         elif isinstance(module, torch.nn.LayerNorm):
-            replacement = SafeLayerNorm(module)
+            replacement = SafeLayerNorm(module, k)
         if replacement is None or not name:
             continue
         parent_name, _, child = name.rpartition(".")

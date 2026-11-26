@@ -19,7 +19,8 @@ def main():
     os.makedirs(ref_dir, exist_ok=True)
     torch.set_grad_enabled(False)
     wrapper = ca.build(adc_dir)
-    safe_fp16.make_norms_safe(wrapper)
+    ks = ca.calibrate_norm_scales(wrapper, ca.calibration_samples())
+    safe_fp16.make_norms_safe(wrapper, ks)
     for module in wrapper.modules():
         if hasattr(module, "set_processor"):
             module.set_processor(safe_fp16.SafeAttnProcessor())
