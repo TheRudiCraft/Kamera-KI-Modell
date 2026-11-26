@@ -67,24 +67,35 @@ def main():
     for n, t, a, m, f in top:
         print("  %-60s %-16s %.1f" % (n, t, m))
 
-    model16 = model.half()
-    out16, rec16 = collect(model16, sample, torch.float16)
-    print("fp16 in PyTorch: Abweichung zu fp32 %.2f, Mittel %.1f, endlich %s" % (float((out16 - out32).abs().mean()), out16.mean(), bool(torch.isfinite(out16).all())))
-    worst = []
-    for (n, t, a32, m32, f32), (_, _, a16, m16, f16) in zip(rec32, rec16):
-        denom = float(np.abs(a32).mean()) + 1e-6
-        err = float(np.abs(a32 - a16).mean()) / denom
-        worst.append((err, n, t, m32, m16, f16))
-    print("Erste Schichten mit Fehler über 5 %% (Reihenfolge der Ausführung):")
-    shown = 0
-    for err, n, t, m32, m16, f16 in worst:
-        if err > 0.05 or not f16:
-            print("  Fehler %.2f  %-55s %-16s max32 %.1f max16 %.1f endlich %s" % (err, n, t, m32, m16, f16))
-            shown += 1
-            if shown >= 12:
-                break
-    if shown == 0:
-        print("  keine, fp16 in PyTorch stimmt überall")
+    sim_log = []
+
+    def make_round(name):
+        def hook(module, inputs, output):
+            if not isinstance(output, torch.Tensor):
+                return output
+            big = float(output.abs().max())
+            half = output.half()
+            bad = not bool(torch.isfinite(half).all())
+            sim_log.append((name, type(module).__name__, big, bad))
+            return half.float()
+        return hook
+
+    hooks = []
+    for name, module in model.named_modules():
+        if isinstance(module, (torch.nn.Conv2d, torch.nn.Linear, safe_fp16.SafeGroupNorm, safe_fp16.SafeLayerNorm)) or hasattr(module, "set_processor"):
+            hooks.append(module.register_forward_hook(make_round(name)))
+    with torch.no_grad():
+        out16 = model(sample)
+    for h in hooks:
+        h.remove()
+    print("fp16-Rundung simuliert: Abweichung zu fp32 %.2f, Mittel %.1f, endlich %s" % (float((out16 - out32).abs().mean()), out16.mean(), bool(torch.isfinite(out16).all())), flush=True)
+    bad = [r for r in sim_log if r[3]]
+    print("Schichten mit Überlauf (inf):", len(bad), flush=True)
+    for n, t, m, b in bad[:10]:
+        print("  %-60s %-16s max %.0f" % (n, t, m), flush=True)
+    print("Größte Werte insgesamt:", flush=True)
+    for n, t, m, b in sorted(sim_log, key=lambda r: -r[2])[:8]:
+        print("  %-60s %-16s max %.0f" % (n, t, m), flush=True)
 
 
 if __name__ == "__main__":
