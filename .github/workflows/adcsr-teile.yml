@@ -1,19 +1,20 @@
-name: AdcSR diagnostizieren
+name: AdcSR Teile prüfen
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - .github/workflows/adcsr-diag.yml
-      - scripts/diag_adcsr.py
+      - .github/workflows/adcsr-teile.yml
+      - scripts/parts_adcsr.py
+      - scripts/test_parts_adcsr.py
 
 permissions:
   contents: read
   actions: read
 
 jobs:
-  diagnose:
+  umwandeln:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -42,5 +43,38 @@ jobs:
       - name: AdcSR holen
         run: git clone --depth 1 https://github.com/Guaishou74851/AdcSR.git /mnt/AdcSR
 
-      - name: Schicht für Schicht prüfen
-        run: python scripts/diag_adcsr.py /mnt/AdcSR referenz
+      - name: Stufen umwandeln
+        run: python scripts/parts_adcsr.py /mnt/AdcSR /mnt/var referenz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: referenz
+          path: referenz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stufen
+          path: /mnt/var
+          compression-level: 0
+
+  pruefen:
+    needs: umwandeln
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: referenz
+          path: referenz
+      - uses: actions/download-artifact@v4
+        with:
+          name: stufen
+          path: stufen
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pakete installieren
+        run: python -m pip install --quiet "numpy<2.3" coremltools==9.0
+      - name: Stufen vergleichen
+        run: python scripts/test_parts_adcsr.py stufen referenz
