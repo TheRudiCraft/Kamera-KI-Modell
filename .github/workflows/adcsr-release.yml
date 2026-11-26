@@ -1,0 +1,57 @@
+name: AdcSR veröffentlichen
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/adcsr-release.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  veroeffentlichen:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variante: [pal6, int8]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: adcsr-${{ matrix.variante }}
+          path: paket.mlpackage
+          run-id: 45814961520
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: adcsr-ergebnis-${{ matrix.variante }}
+          path: ergebnis
+          run-id: 45814961520
+          github-token: ${{ github.token }}
+
+      - name: Dateien vorbereiten
+        run: |
+          mkdir -p out
+          cp paket.mlpackage/Manifest.json out/Manifest.json
+          cp paket.mlpackage/Data/com.apple.CoreML/model.mlmodel out/model.mlmodel
+          cp paket.mlpackage/Data/com.apple.CoreML/weights/weight.bin out/weight.bin
+          cp ergebnis/coreml_cpu.png out/kontrolle.png
+          ls -l out
+          printf 'AdcSR (Adversarial Diffusion Compression, CVPR 2025, Apache 2.0), Variante ${{ matrix.variante }}. Eingang 128x128 Bild, Ausgang 512x512 (4x). PSNR gegen PyTorch-Original auf dem Testbild: pal6 31.4 dB, int8 33.1 dB, fp16 33.2 dB. Basis Stable Diffusion 2.1 base (CreativeML Open RAIL++-M), mit kalibrierten überlaufsicheren Normierungen für fp16. Wird von der Kamera-App geladen.\n' > body.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: gen-adcsr-${{ matrix.variante }}
+          name: AdcSR (${{ matrix.variante }})
+          body_path: body.txt
+          overwrite_files: true
+          make_latest: false
+          files: |
+            out/Manifest.json
+            out/model.mlmodel
+            out/weight.bin
+            out/kontrolle.png
